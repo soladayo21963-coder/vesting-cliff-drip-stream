@@ -117,6 +117,102 @@ impl VestingDrips {
         Ok(())
     }
 
+    /// Creates multiple cliff-vesting streams in a single atomic transaction.
+    ///
+    /// All schedules are created or none are (atomic rollback on any error).
+    /// Total deposit is transferred from sponsor in one call.
+    /// Individual StreamCreated events are emitted for each recipient.
+    ///
+    /// # Arguments
+    /// * `sponsor`  – The funder; must authorise this call and hold sufficient tokens.
+    /// * `token`    – SAC-compatible token contract address.
+    /// * `streams`  – Vec of (recipient, rate, cliff_duration, total_duration) tuples.
+    ///
+    /// # Errors
+    /// * `InvalidRate`            – Any `rate` is zero or negative.
+    /// * `InvalidDuration`        – Any `total_duration` ≤ `cliff_duration`.
+    /// * `InvalidRecipient`       – Any `sponsor` equals `recipient`.
+    /// * `ScheduleAlreadyExists`  – A stream already exists for any `recipient`.
+    /// * `DepositOverflow`        – Total deposit would exceed i128 bounds.
+    /// * `TransferFailed`         – Token transfer failed.
+    pub fn create_batch_streams(
+        env: Env,
+        sponsor: Address,
+        token: Address,
+        streams: soroban_sdk::Vec<(Address, i128, u32, u32)>,
+    ) -> Result<(), VestingError> {
+        sponsor.require_auth();
+
+        // ── Validation pass: check all streams before making any changes ────────
+        let mut total_deposit: i128 = 0;
+        let start_ledger: u32 = env.ledger().sequence();
+
+        for (recipient, rate, cliff_duration, total_duration) in streams.iter() {
+            // Validate rate
+            if rate <= 0 {
+                return Err(VestingError::InvalidRate);
+            }
+            // Validate durations
+            if total_duration <= cliff_duration {
+                return Err(VestingError::InvalidDuration);
+            }
+            // Validate recipient
+            if sponsor == recipient {
+                return Err(VestingError::InvalidRecipient);
+            }
+            // Check if schedule already exists
+            if storage::has_schedule(&env, &recipient) {
+                return Err(VestingError::ScheduleAlreadyExists);
+            }
+            // Add to total deposit
+            let deposit = calculate_total_deposit(rate, total_duration)?;
+            total_deposit = total_deposit
+                .checked_add(deposit)
+                .ok_or(VestingError::DepositOverflow)?;
+        }
+
+        // ── Transfer total deposit from sponsor ────────────────────────────────
+        let token_client = token::Client::new(&env, &token);
+        token_client
+            .try_transfer(&sponsor, &env.current_contract_address(), &total_deposit)
+            .map_err(|_| VestingError::TransferFailed)?;
+
+        // ── Create schedules and emit events (now that transfer succeeded) ──────
+        for (recipient, rate, cliff_duration, total_duration) in streams.iter() {
+            let cliff_ledger: u32 = start_ledger
+                .checked_add(cliff_duration)
+                .ok_or(VestingError::DepositOverflow)?;
+            let end_ledger: u32 = start_ledger
+                .checked_add(total_duration)
+                .ok_or(VestingError::DepositOverflow)?;
+
+            let schedule = VestingSchedule {
+                version: 1,
+                token: token.clone(),
+                rate_per_ledger: rate,
+                start_ledger,
+                cliff_ledger,
+                end_ledger,
+                last_claimed_ledger: start_ledger,
+                total_claimed: 0,
+            };
+            storage::set_schedule(&env, &recipient, &schedule);
+
+            events::emit_stream_created(
+                &env,
+                &sponsor,
+                &recipient,
+                &token,
+                rate,
+                start_ledger,
+                cliff_ledger,
+                end_ledger,
+            );
+        }
+
+        Ok(())
+    }
+
     /// Upgrades a legacy (`version = 0`) schedule to the current schema version.
     ///
     /// Schedules written before the versioning field was introduced read back
