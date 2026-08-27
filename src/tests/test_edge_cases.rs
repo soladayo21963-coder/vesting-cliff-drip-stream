@@ -28,7 +28,7 @@ fn test_minimal_cliff_one_ledger() {
 
     // Cliff is at ledger 101; advance just 1.
     advance_ledger(&env, 1);
-    let claimed = client.claim_vested(&recipient).unwrap();
+    let claimed = client.claim_vested(&recipient, &None).unwrap();
     assert_eq!(claimed, 10); // 1 ledger × 10
     assert_eq!(token_client.balance(&recipient), 10);
 }
@@ -58,8 +58,8 @@ fn test_multiple_independent_streams() {
     // Advance to ledger 170 (70 past start; B cliff at 120 passed, A cliff at 150 passed)
     advance_ledger(&env, 70);
 
-    let claimed_a = client.claim_vested(&recipient_a).unwrap();
-    let claimed_b = client.claim_vested(&recipient_b).unwrap();
+    let claimed_a = client.claim_vested(&recipient_a, &None).unwrap();
+    let claimed_b = client.claim_vested(&recipient_b, &None).unwrap();
 
     assert_eq!(claimed_a, 700);   // 70 × 10
     assert_eq!(claimed_b, 1_050); // 70 × 15
@@ -84,7 +84,7 @@ fn test_claim_exactly_at_end_removes_schedule() {
         .unwrap();
 
     advance_ledger(&env, 100); // exactly end_ledger
-    client.claim_vested(&recipient).unwrap();
+    client.claim_vested(&recipient, &None).unwrap();
 
     assert!(client.get_schedule(&recipient).is_none());
 }
@@ -108,11 +108,11 @@ fn test_incremental_claims_sum_to_total() {
 
     // Claim in three separate windows: cliff, mid, end
     advance_ledger(&env, 20);
-    client.claim_vested(&recipient).unwrap();
+    client.claim_vested(&recipient, &None).unwrap();
     advance_ledger(&env, 40);
-    client.claim_vested(&recipient).unwrap();
+    client.claim_vested(&recipient, &None).unwrap();
     advance_ledger(&env, 40);
-    client.claim_vested(&recipient).unwrap();
+    client.claim_vested(&recipient, &None).unwrap();
 
     assert_eq!(token_client.balance(&recipient), 500);
 }
@@ -139,7 +139,7 @@ fn test_regression_cliff_equals_total_minus_one() {
 
     // Jump exactly to end_ledger (100 ledgers).
     advance_ledger(&env, 100);
-    let claimed = client.claim_vested(&recipient).unwrap();
+    let claimed = client.claim_vested(&recipient, &None).unwrap();
     // 100 ledgers total × 10 = 1000
     assert_eq!(claimed, 1_000);
     assert_eq!(token_client.balance(&recipient), 1_000);
@@ -165,7 +165,7 @@ fn test_regression_rate_of_one() {
         .unwrap();
 
     advance_ledger(&env, 10); // exactly at cliff
-    let claimed = client.claim_vested(&recipient).unwrap();
+    let claimed = client.claim_vested(&recipient, &None).unwrap();
     assert_eq!(claimed, 10); // 10 ledgers × 1
     assert_eq!(token_client.balance(&recipient), 10);
 }
@@ -190,7 +190,7 @@ fn test_regression_claim_well_past_end_caps_correctly() {
 
     // Advance 10_000 ledgers past the end.
     advance_ledger(&env, 10_000);
-    let claimed = client.claim_vested(&recipient).unwrap();
+    let claimed = client.claim_vested(&recipient, &None).unwrap();
     // Must be exactly the deposit, not 10_000 × 10.
     assert_eq!(claimed, 500);
     assert_eq!(token_client.balance(&recipient), 500);
@@ -400,9 +400,10 @@ fn test_expired_ttl_reaches_zero_and_cancelled_stream_returns_schedule_not_found
     client.cancel_stream(&sponsor, &recipient).unwrap();
 
     // Subsequent calls now return ScheduleNotFound because the entry was removed.
-    let err = client.claim_vested(&recipient).unwrap_err();
+    let err = client.claim_vested(&recipient, &None).unwrap_err();
     assert_eq!(err, VestingError::ScheduleNotFound.into());
 
     let err2 = client.cancel_stream(&sponsor, &recipient).unwrap_err();
     assert_eq!(err2, VestingError::ScheduleNotFound.into());
 }
+

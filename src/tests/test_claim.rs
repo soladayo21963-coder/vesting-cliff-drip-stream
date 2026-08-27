@@ -81,10 +81,37 @@ fn test_first_claim_at_cliff_includes_all_accrued() {
     // Jump exactly to the cliff (ledger 150).
     advance_ledger(&env, 50);
 
-    let claimed = client.claim_vested(&recipient).unwrap();
+    let claimed = client.claim_vested(&recipient, &None).unwrap();
     // 50 ledgers accrued since start × 10 = 500
     assert_eq!(claimed, 500);
     assert_eq!(token_client.balance(&recipient), 500);
+}
+
+#[test]
+fn test_partial_claim_exact_amount() {
+    let env = setup_env();
+    let contract_id = env.register(VestingDrips, ());
+    let client = VestingDripsClient::new(&env, &contract_id);
+
+    let sponsor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (token_id, token_client) = create_token(&env, &sponsor);
+    mint_to(&env, &token_id, &sponsor, 2_000);
+
+    client
+        .create_vesting_stream(&sponsor, &recipient, &token_id, &10, &50, &200)
+        .unwrap();
+
+    // Jump to cliff + 50 ledgers (1000 tokens accrued)
+    advance_ledger(&env, 100);
+
+    // Claim exactly 300 tokens
+    let claimed = client.claim_vested(&recipient, &Some(300)).unwrap();
+    assert_eq!(claimed, 300);
+    assert_eq!(token_client.balance(&recipient), 300);
+
+    // Verify remaining 700 are still claimable
+    assert_eq!(client.claimable_amount(&recipient), 700);
 }
 
 #[test]
@@ -104,12 +131,12 @@ fn test_partial_claim_mid_stream() {
 
     // First claim at cliff+50 (ledger 200)
     advance_ledger(&env, 100);
-    let claimed1 = client.claim_vested(&recipient).unwrap();
+    let claimed1 = client.claim_vested(&recipient, &None).unwrap();
     assert_eq!(claimed1, 1_000); // 100 ledgers × 10
 
     // Second claim at ledger 250
     advance_ledger(&env, 50);
-    let claimed2 = client.claim_vested(&recipient).unwrap();
+    let claimed2 = client.claim_vested(&recipient, &None).unwrap();
     assert_eq!(claimed2, 500); // 50 ledgers × 10
 
     assert_eq!(token_client.balance(&recipient), 1_500);
@@ -133,7 +160,7 @@ fn test_claim_past_end_caps_at_end_ledger() {
     // Jump way past the end ledger (300)
     advance_ledger(&env, 500);
 
-    let claimed = client.claim_vested(&recipient).unwrap();
+    let claimed = client.claim_vested(&recipient, &None).unwrap();
     assert_eq!(claimed, 2_000); // entire deposit, capped at end_ledger
     assert_eq!(token_client.balance(&recipient), 2_000);
 
@@ -157,10 +184,10 @@ fn test_double_claim_same_ledger_returns_nothing_to_claim() {
         .unwrap();
 
     advance_ledger(&env, 100);
-    client.claim_vested(&recipient).unwrap();
+    client.claim_vested(&recipient, &None).unwrap();
 
     // Claiming again at the same ledger should return NothingToClaim.
-    let err = client.claim_vested(&recipient).unwrap_err();
+    let err = client.claim_vested(&recipient, &None).unwrap_err();
     assert_eq!(err, VestingError::NothingToClaim.into());
 }
 
@@ -171,8 +198,61 @@ fn test_claim_nonexistent_schedule_fails() {
     let client = VestingDripsClient::new(&env, &contract_id);
     let random = Address::generate(&env);
 
-    let err = client.claim_vested(&random).unwrap_err();
+    let err = client.claim_vested(&random, &None).unwrap_err();
     assert_eq!(err, VestingError::ScheduleNotFound.into());
+}
+
+#[test]
+fn test_claim_over_amount_fails() {
+    let env = setup_env();
+    let contract_id = env.register(VestingDrips, ());
+    let client = VestingDripsClient::new(&env, &contract_id);
+
+    let sponsor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (token_id, _) = create_token(&env, &sponsor);
+    mint_to(&env, &token_id, &sponsor, 2_000);
+
+    client
+        .create_vesting_stream(&sponsor, &recipient, &token_id, &10, &50, &200)
+        .unwrap();
+
+    // Jump to cliff + 50 ledgers (1000 tokens accrued)
+    advance_ledger(&env, 100);
+
+    // Try to claim more than available
+    let err = client.claim_vested(&recipient, &Some(1_500)).unwrap_err();
+    assert_eq!(err, VestingError::InsufficientClaimable.into());
+
+    // Verify no tokens were transferred
+    assert_eq!(client.claimable_amount(&recipient), 1_000);
+}
+
+#[test]
+fn test_claim_exact_full_amount() {
+    let env = setup_env();
+    let contract_id = env.register(VestingDrips, ());
+    let client = VestingDripsClient::new(&env, &contract_id);
+
+    let sponsor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (token_id, token_client) = create_token(&env, &sponsor);
+    mint_to(&env, &token_id, &sponsor, 2_000);
+
+    client
+        .create_vesting_stream(&sponsor, &recipient, &token_id, &10, &50, &200)
+        .unwrap();
+
+    // Jump to cliff + 100 ledgers (all 2000 tokens accrued)
+    advance_ledger(&env, 200);
+
+    // Claim the exact full amount
+    let claimed = client.claim_vested(&recipient, &Some(2_000)).unwrap();
+    assert_eq!(claimed, 2_000);
+    assert_eq!(token_client.balance(&recipient), 2_000);
+
+    // Schedule should be removed after full claim.
+    assert!(client.get_schedule(&recipient).is_none());
 }
 
 // ── end_ledger boundary tests ─────────────────────────────────────────────────
@@ -198,7 +278,7 @@ fn test_claimable_amount_after_end_ledger_caps_at_remaining() {
 
     // Claim halfway through (at ledger 200 = start+100)
     advance_ledger(&env, 100);
-    client.claim_vested(&recipient).unwrap(); // claims 1000
+    client.claim_vested(&recipient, &None).unwrap(); // claims 1000
 
     // Advance well past end_ledger
     advance_ledger(&env, 500);
@@ -214,9 +294,9 @@ fn test_claim_after_all_tokens_claimed_returns_nothing_to_claim() {
 
     // Advance past end and claim everything
     advance_ledger(&env, 300);
-    client.claim_vested(&recipient).unwrap();
+    client.claim_vested(&recipient, &None).unwrap();
 
     // Schedule is removed; a second attempt should return ScheduleNotFound
-    let err = client.claim_vested(&recipient).unwrap_err();
+    let err = client.claim_vested(&recipient, &None).unwrap_err();
     assert_eq!(err, VestingError::ScheduleNotFound.into());
 }

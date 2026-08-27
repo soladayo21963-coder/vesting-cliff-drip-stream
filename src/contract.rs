@@ -230,17 +230,24 @@ impl VestingDrips {
 
     // ── Recipient ─────────────────────────────────────────────────────────────
 
-    /// Claims all vested tokens accrued since the last claim.
+    /// Claims vested tokens accrued since the last claim.
+    ///
+    /// When `amount` is `None`, claims all accrued tokens. When `amount` is `Some(n)`,
+    /// claims exactly `n` tokens if they are available (n ≤ claimable_amount).
     ///
     /// The cliff must have been reached before any tokens can be withdrawn.
-    /// On first claim after the cliff, all tokens accrued from `start_ledger`
-    /// are released in a single transfer, then streaming continues linearly.
+    /// On first claim after the cliff, tokens are released starting from `start_ledger`.
     ///
     /// # Errors
-    /// * `ScheduleNotFound` – No stream exists for `recipient`.
-    /// * `CliffNotReached`  – Current ledger < `cliff_ledger`.
-    /// * `NothingToClaim`   – Claimable amount is zero.
-    pub fn claim_vested(env: Env, recipient: Address) -> Result<i128, VestingError> {
+    /// * `ScheduleNotFound`       – No stream exists for `recipient`.
+    /// * `CliffNotReached`        – Current ledger < `cliff_ledger`.
+    /// * `NothingToClaim`         – Claimable amount is zero (only when `amount` is `None`).
+    /// * `InsufficientClaimable`  – Requested amount exceeds available claimable tokens.
+    pub fn claim_vested(
+        env: Env,
+        recipient: Address,
+        amount: Option<i128>,
+    ) -> Result<i128, VestingError> {
         recipient.require_auth();
 
         let mut schedule = storage::get_schedule(&env, &recipient)
@@ -261,17 +268,30 @@ impl VestingDrips {
             return Err(VestingError::NothingToClaim);
         }
 
+        // Determine the actual amount to claim
+        let claim_amount = match amount {
+            None => claimable_amount,
+            Some(requested) => {
+                if requested > claimable_amount {
+                    return Err(VestingError::InsufficientClaimable);
+                }
+                requested
+            }
+        };
+
         // Transfer tokens to recipient before mutating storage so that a
         // transfer failure leaves the schedule intact.
         let token_client = token::Client::new(&env, &schedule.token);
         token_client
-            .try_transfer(&env.current_contract_address(), &recipient, &claimable_amount)
+            .try_transfer(&env.current_contract_address(), &recipient, &claim_amount)
             .map_err(|_| VestingError::TransferFailed)?;
 
-        // Update or remove the schedule only after the transfer succeeds.
-        schedule.last_claimed_ledger = active_end;
-        schedule.total_claimed += claimable_amount;
-        let stream_finished = active_end == schedule.end_ledger;
+        // Update the schedule based on the actual claim amount
+        // Calculate how many ledgers this claim amount represents
+        let claim_ledgers = (claim_amount + schedule.rate_per_ledger - 1) / schedule.rate_per_ledger;
+        schedule.last_claimed_ledger = (schedule.last_claimed_ledger as i128 + claim_ledgers) as u32;
+        schedule.total_claimed += claim_amount;
+        let stream_finished = schedule.last_claimed_ledger >= schedule.end_ledger;
 
         if stream_finished {
             storage::remove_schedule(&env, &recipient);
@@ -280,9 +300,9 @@ impl VestingDrips {
             storage::set_schedule(&env, &recipient, &schedule);
         }
 
-        events::emit_tokens_claimed(&env, &recipient, claimable_amount, active_end);
+        events::emit_tokens_claimed(&env, &recipient, claim_amount, schedule.last_claimed_ledger);
 
-        Ok(claimable_amount)
+        Ok(claim_amount)
     }
 
     // ── Read-only views ───────────────────────────────────────────────────────

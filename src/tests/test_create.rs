@@ -212,3 +212,4 @@ fn test_storage_keys_are_per_recipient() {
     assert_eq!(bob_sched.cliff_ledger, 160);   // 100 + 60
     assert_eq!(bob_sched.end_ledger, 300);     // 100 + 200
 }
+

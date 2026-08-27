@@ -84,7 +84,7 @@ fn test_get_schedule_returns_none_after_completion() {
         .unwrap();
 
     advance_ledger(&env, 300);
-    client.claim_vested(&recipient).unwrap();
+    client.claim_vested(&recipient, &None).unwrap();
 
     assert!(client.get_schedule(&recipient).is_none());
 }
@@ -154,3 +154,4 @@ fn test_get_status_none_when_no_schedule() {
     let recipient = Address::generate(&env);
     assert_eq!(client.get_status(&recipient), None);
 }
+

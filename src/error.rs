@@ -75,4 +75,10 @@ pub enum VestingError {
     /// and would produce confusing behaviour in `cancel_stream` (the same
     /// address would be both the refund target and the earned-tokens target).
     InvalidRecipient = 10,
+
+    /// **Code 11** — The requested claim amount exceeds the currently claimable balance.
+    ///
+    /// When calling `claim_vested` with a specific amount, ensure that the
+    /// amount does not exceed the value returned by `claimable_amount`.
+    InsufficientClaimable = 11,
 }
