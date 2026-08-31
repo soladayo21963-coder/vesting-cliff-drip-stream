@@ -1,3 +1,9 @@
+// `#[contracterror]` emits an inherent `impl VestingError { spec_xdr() }` with
+// no doc comment of its own; rustc doesn't propagate item-level `#[allow]`
+// onto attribute-macro-generated sibling impls, so the allow has to be
+// module-scoped here.
+#![allow(missing_docs)]
+
 use soroban_sdk::contracterror;
 
 /// All error codes returned by the VestingDrips contract.
@@ -8,6 +14,7 @@ use soroban_sdk::contracterror;
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
+#[allow(missing_docs)]
 pub enum VestingError {
     /// **Code 1** — No active vesting schedule exists for the given recipient.
     ///
@@ -67,12 +74,22 @@ pub enum VestingError {
     ///
     /// The sponsor must wait `end_ledger + DRAIN_DELAY_LEDGERS` ledgers before
     /// calling `emergency_drain`. This prevents abuse on recently-ended streams.
-    DrainDelayNotExpired = 9,
+    DrainDelayNotExpired = 10,
 
-    /// **Code 10** — `sponsor` and `recipient` must be distinct addresses.
+    /// **Code 11** — `sponsor` and `recipient` must be distinct addresses.
     ///
     /// A sponsor creating a stream to themselves is almost certainly a mistake
     /// and would produce confusing behaviour in `cancel_stream` (the same
     /// address would be both the refund target and the earned-tokens target).
-    InvalidRecipient = 10,
+    InvalidRecipient = 11,
+
+    /// **Code 12** — The token address is not a valid SAC (Stellar Asset Contract). Try calling try_balance before storing the schedule.
+    InvalidToken = 12,
+
+    /// **Code 20** — The `metadata` string exceeds the 256-byte limit.
+    ///
+    /// Metadata is measured in UTF-8 bytes, not characters. Trim or omit the
+    /// value before retrying. Do not store sensitive data in metadata as it
+    /// is persisted on-chain and publicly visible.
+    MetadataTooLong = 20,
 }
